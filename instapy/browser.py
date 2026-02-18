@@ -9,7 +9,6 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.firefox.options import Options as Firefox_Options
 from selenium.webdriver import Remote
 from webdriverdownloader import GeckoDriverDownloader
-
 # import InstaPy modules
 from .util import interruption_handler
 from .util import highlight_print
