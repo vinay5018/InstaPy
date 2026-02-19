@@ -1,10 +1,3 @@
-"""
-A fully functional TelegramBot to get info on an instapy run
-or to control the instapy bot
-
-you will need to create your token on the telegram app and speak with @botfather
-you will need to have a username (go to settings -> profile -> Username
-"""
 import logging
 import os
 import re
@@ -19,9 +12,12 @@ from telegram.error import (
     ChatMigrated,
     NetworkError,
 )
-
 from ..util import truncate_float
+import asyncio
 
+# Define named constants
+MAX_TEXT_LEN = 4096
+TIMEOUT = 10
 
 class InstaPyTelegramException(Exception):
     """Custom exception for Telegram bot errors."""
@@ -99,6 +95,7 @@ class InstaPyTelegramBot:
     def _safe_chat_file_path(self):
         """Prevent path traversal by forcing file inside logfolder."""
         base = os.path.abspath(self.instapy_session.logfolder)
+        assert base.startswith(os.path.abspath(os.path.dirname(__file__)))
         path = os.path.join(base, "telegram_chat_id.txt")
         return path
 
@@ -106,7 +103,7 @@ class InstaPyTelegramBot:
         """Remove any webhooks with timeout to avoid hangs."""
         url = f"https://api.telegram.org/bot{self.token}/deleteWebhook"
         try:
-            resp = requests.get(url, timeout=10)
+            resp = requests.get(url, timeout=TIMEOUT)
             if not resp.json().get("ok"):
                 self.__logger.warning("Unable to remove webhook – wrong token?")
         except RequestException as exc:
@@ -173,6 +170,8 @@ class InstaPyTelegramBot:
         # (defence in depth)
         if not self.telegram_username:
             raise InstaPyTelegramException("No authorised username configured")
+        # Sanitize text before sending to Telegram API
+        text = text[:MAX_TEXT_LEN]
         self.__context.bot.send_message(chat_id=self.__chat_id, text=text)
 
     def delete_session_file(self):
@@ -260,6 +259,8 @@ class InstaPyTelegramBot:
 
     def _live_report(self):
         """Build a concise live report string."""
+        # Cache instapy_session properties
+        sessional_run_time = self.instapy_session.run_time()
         stats = [
             self.instapy_session.liked_img,
             self.instapy_session.already_liked,
@@ -272,7 +273,6 @@ class InstaPyTelegramBot:
             self.instapy_session.inap_img,
             self.instapy_session.not_valid_users,
         ]
-        sessional_run_time = self.instapy_session.run_time()
         run_time_info = (
             f"{sessional_run_time} seconds"
             if sessional_run_time < 60
@@ -330,3 +330,37 @@ class InstaPyTelegramBot:
             logging.getLogger(__name__).warning(
                 "Static delete failed: %s", exc
             )
+
+    async def _async_restore_chat_id(self):
+        if self.instapy_session is None:
+            return
+        chat_file = self._safe_chat_file_path()
+        try:
+            with open(chat_file, "r", encoding="utf-8") as f:
+                self.__chat_id = f.read().strip()
+        except (OSError, IOError):
+            self.__chat_id = None
+
+    async def _async_delete_session_file(self):
+        chat_file = self._safe_chat_file_path()
+        try:
+            os.remove(chat_file)
+        except FileNotFoundError:
+            self.__logger.debug("Chat file already absent")
+        except OSError as exc:
+            self.__logger.warning("Could not delete chat file: %s", exc)
+
+    def _validate_token(self):
+        """Validate bot token by calling Telegram API."""
+        url = f"https://api.telegram.org/bot{self.token}/getMe"
+        try:
+            resp = requests.get(url, timeout=TIMEOUT)
+            if not resp.json().get("ok"):
+                raise InstaPyTelegramException("Invalid bot token")
+        except RequestException as exc:
+            raise InstaPyTelegramException("Failed to validate bot token")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._validate_token()
+        asyncio.run(self._async_restore_chat_id())
