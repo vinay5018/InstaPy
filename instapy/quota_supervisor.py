@@ -181,17 +181,17 @@ def stochasticity(peaks):
 
 def stochast_values(peaks, orig_peaks, interval, percent):
     """Return randomly generated stochastic peak values"""
-    for job in orig_peaks:
-        job_data = orig_peaks[job]
-
-        stochastic_peak = (
-            None
-            if job_data[interval] is None
-            else stoch_randomizer(job_data[interval], percent)
-        )
-
-        # update the peaks object with a stochastic value for the given job
-        peaks[job][interval] = stochastic_peak
+    # dictionary comprehension avoids explicit for-loop and is O(n)
+    peaks[interval].update(
+        {
+            job: (
+                None
+                if orig_peaks[job][interval] is None
+                else stoch_randomizer(orig_peaks[job][interval], percent)
+            )
+            for job in orig_peaks
+        }
+    )
 
 
 def stoch_randomizer(value, percent):
@@ -359,12 +359,13 @@ def load_records():
     with conn:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
+        # use parameter binding to avoid SQL injection
         cur.execute(
             "SELECT * FROM recordActivity "
-            "WHERE profile_id=:var AND "
+            "WHERE profile_id=? AND "
             "STRFTIME('%Y-%m-%d', created) == "
             "STRFTIME('%Y-%m-%d', 'now', 'localtime')",
-            {"var": profile_id},
+            (profile_id,)
         )
         daily_data = cur.fetchall()
 
@@ -399,7 +400,8 @@ def get_record(job, interval):
             record = records[today][this_hour][job]
 
         elif interval == "daily":
-            record = sum(i[1][job] for i in list(records[today].items()))
+            # generator expression without list() to reduce memory churn
+            record = sum(i[1][job] for i in records[today].items())
 
     except KeyError:
         # record does not yet exist
